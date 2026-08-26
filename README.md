@@ -27,10 +27,30 @@ pip install -r requirements.txt
 
 ## Usage
 
+### Command line
+
 ```bash
 python -m osint_lookup.cli someone@example.com
 python -m osint_lookup.cli "Jane Doe"
 ```
+
+### Web UI
+
+A dark, graph-style local web UI is also included: the query sits in the
+center and each source that was checked branches off as a dot — bright
+green if it was found, dim grey if not, red if the check errored. Click a
+found dot to open a small popup with the evidence and a clickable link to
+where it was found.
+
+```bash
+python -m osint_lookup.webapp
+```
+
+Then open http://127.0.0.1:5000 in a browser. Results are saved to a local
+SQLite database (`~/.osint_lookup/history.db`), and the browser remembers
+your last query, so reopening the app (or the browser tab) restores the
+same graph without re-querying the network. A sidebar lists past searches
+you can click back into.
 
 Optional environment variables:
 

@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OSINT Lookup</title>
+<style>
+  :root {
+    --bg: #0e0f13;
+    --panel: #16181f;
+    --border: #262933;
+    --text: #e6e8ef;
+    --muted: #7a7f8f;
+    --accent: #4fd1a5;
+    --accent-dim: #2a5a48;
+    --error: #e0665a;
+    --error-dim: #4a2e2b;
+    --center: #6ea8ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  #query-input {
+    flex: 1;
+    max-width: 420px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+  #query-input:focus { outline: none; border-color: var(--accent); }
+  #search-btn {
+    background: var(--accent);
+    color: #0b1512;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #search-btn:disabled { opacity: 0.5; cursor: default; }
+  #status { color: var(--muted); font-size: 13px; }
+
+  .layout { flex: 1; display: flex; min-height: 0; }
+  aside {
+    width: 220px;
+    border-right: 1px solid var(--border);
+    padding: 12px;
+    overflow-y: auto;
+  }
+  aside h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 4px 0 10px;
+  }
+  .recent-item {
+    padding: 7px 8px;
+    border-radius: 5px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .recent-item:hover { background: var(--panel); }
+
+  #graph-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+  svg { width: 100%; height: 100%; }
+  .edge { stroke: var(--border); stroke-width: 1.5; }
+  .node-center circle { fill: var(--center); }
+  .node-center text { fill: var(--text); font-size: 13px; font-weight: 600; }
+  .dot { cursor: pointer; }
+  .dot.found circle { fill: var(--accent); }
+  .dot.missing circle { fill: #33384a; }
+  .dot.error circle { fill: var(--error-dim); stroke: var(--error); stroke-width: 1.5; }
+  .dot text { fill: var(--muted); font-size: 11px; }
+  .dot:hover circle { filter: brightness(1.3); }
+
+  #empty-hint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 14px;
+    pointer-events: none;
+  }
+
+  .popup {
+    position: absolute;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    max-width: 260px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    font-size: 13px;
+    z-index: 10;
+  }
+  .popup .src { font-weight: 600; margin-bottom: 4px; }
+  .popup .ev { color: var(--muted); margin-bottom: 8px; line-height: 1.4; }
+  .popup a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 12px;
+    word-break: break-all;
+  }
+  .popup a:hover { text-decoration: underline; }
+  .popup .close {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>OSINT LOOKUP</h1>
+    <input id="query-input" type="text" placeholder="Enter an email or a name..." />
+    <button id="search-btn">Search</button>
+    <span id="status"></span>
+  </header>
+  <div class="layout">
+    <aside>
+      <h2>Recent</h2>
+      <div id="recent-list"></div>
+    </aside>
+    <div id="graph-wrap">
+      <div id="empty-hint">Enter an email or name to begin</div>
+      <svg id="graph" viewBox="0 0 900 600" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+  </div>
+
+<script>
+const svg = document.getElementById('graph');
+const emptyHint = document.getElementById('empty-hint');
+const input = document.getElementById('query-input');
+const searchBtn = document.getElementById('search-btn');
+const statusEl = document.getElementById('status');
+const recentList = document.getElementById('recent-list');
+const LAST_QUERY_KEY = 'osint_last_query';
+
+let activePopup = null;
+
+function svgEl(tag, attrs) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+function closePopup() {
+  if (activePopup) { activePopup.remove(); activePopup = null; }
+}
+
+function statusFor(finding) {
+  if (finding.error) return 'error';
+  return finding.found ? 'found' : 'missing';
+}
+
+function renderGraph(result) {
+  svg.innerHTML = '';
+  closePopup();
+  emptyHint.style.display = 'none';
+
+  const cx = 450, cy = 300, radius = 200;
+  const findings = result.findings || [];
+
+  findings.forEach((f, i) => {
+    const angle = (i / Math.max(findings.length, 1)) * Math.PI * 2 - Math.PI / 2;
+    const x = cx + radius * Math.cos(angle);
+    const y = cy + radius * Math.sin(angle);
+
+    svg.appendChild(svgEl('line', { class: 'edge', x1: cx, y1: cy, x2: x, y2: y }));
+
+    const g = svgEl('g', { class: `dot ${statusFor(f)}`, transform: `translate(${x},${y})` });
+    g.appendChild(svgEl('circle', { r: 14 }));
+    const label = svgEl('text', { 'text-anchor': 'middle', y: 30 });
+    label.textContent = f.source;
+    g.appendChild(label);
+
+    g.addEventListener('click', (evt) => showPopup(evt, f));
+    svg.appendChild(g);
+  });
+
+  const centerG = svgEl('g', { class: 'node-center' });
+  centerG.appendChild(svgEl('circle', { cx, cy, r: 22 }));
+  const centerLabel = svgEl('text', { x: cx, y: cy + 40, 'text-anchor': 'middle' });
+  centerLabel.textContent = result.query;
+  centerG.appendChild(centerLabel);
+  svg.appendChild(centerG);
+}
+
+function showPopup(evt, finding) {
+  evt.stopPropagation();
+  closePopup();
+
+  const wrap = document.getElementById('graph-wrap');
+  const rect = wrap.getBoundingClientRect();
+  const popup = document.createElement('div');
+  popup.className = 'popup';
+  popup.style.left = Math.min(evt.clientX - rect.left + 10, rect.width - 270) + 'px';
+  popup.style.top = Math.min(evt.clientY - rect.top + 10, rect.height - 140) + 'px';
+
+  const closeBtn = document.createElement('span');
+  closeBtn.className = 'close';
+  closeBtn.textContent = '✕';
+  closeBtn.addEventListener('click', closePopup);
+  popup.appendChild(closeBtn);
+
+  const src = document.createElement('div');
+  src.className = 'src';
+  src.textContent = finding.source;
+  popup.appendChild(src);
+
+  const ev = document.createElement('div');
+  ev.className = 'ev';
+  ev.textContent = finding.error
+    ? `Error: ${finding.error}`
+    : (finding.found ? (finding.evidence || 'Match found') : 'Not found');
+  popup.appendChild(ev);
+
+  if (finding.url) {
+    const a = document.createElement('a');
+    a.href = finding.url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = finding.url;
+    popup.appendChild(a);
+  }
+
+  wrap.appendChild(popup);
+  activePopup = popup;
+}
+
+document.getElementById('graph-wrap').addEventListener('click', closePopup);
+
+async function loadRecent() {
+  const res = await fetch('/api/recent');
+  const items = await res.json();
+  recentList.innerHTML = '';
+  items.forEach((item) => {
+    const div = document.createElement('div');
+    div.className = 'recent-item';
+    div.textContent = item.query;
+    div.title = item.query;
+    div.addEventListener('click', () => loadStored(item.query));
+    recentList.appendChild(div);
+  });
+}
+
+async function loadStored(query) {
+  statusEl.textContent = 'Loading...';
+  const res = await fetch(`/api/lookup?query=${encodeURIComponent(query)}`);
+  if (!res.ok) { statusEl.textContent = ''; return; }
+  const result = await res.json();
+  input.value = result.query;
+  localStorage.setItem(LAST_QUERY_KEY, result.query);
+  renderGraph(result);
+  statusEl.textContent = '';
+}
+
+async function runSearch() {
+  const query = input.value.trim();
+  if (!query) return;
+
+  searchBtn.disabled = true;
+  statusEl.textContent = 'Searching...';
+  try {
+    const res = await fetch('/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      statusEl.textContent = result.error || 'Search failed';
+      return;
+    }
+    localStorage.setItem(LAST_QUERY_KEY, result.query);
+    renderGraph(result);
+    await loadRecent();
+    statusEl.textContent = '';
+  } catch (err) {
+    statusEl.textContent = 'Search failed: ' + err.message;
+  } finally {
+    searchBtn.disabled = false;
+  }
+}
+
+searchBtn.addEventListener('click', runSearch);
+input.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
+
+(async function init() {
+  await loadRecent();
+  const last = localStorage.getItem(LAST_QUERY_KEY);
+  if (last) await loadStored(last);
+})();
+</script>
+</body>
+</html>
